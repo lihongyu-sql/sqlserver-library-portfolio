@@ -1,40 +1,54 @@
 # SQL Server 图书借阅数据库实践
 
-这是一个用于学习和求职展示的 SQL Server 小型项目。项目围绕图书借阅业务，包含数据建模、查询、视图、存储过程、事务和索引，不依赖任何第三方框架。
+一个基于 SQL Server 与 T-SQL 实现的图书借阅数据管理项目。项目覆盖关系建模、约束设计、数据查询、借阅分析、视图封装、事务型存储过程和索引优化，适合作为数据库开发与实施岗位的代码作品。
 
-> 练习数据库名称：`LibraryPractice`
->
-> 建议环境：SQL Server 2019 或更高版本、SQL Server Management Studio（SSMS）
+## 项目概览
 
-## 1. 你将完成什么
-
-项目包含 4 张核心业务表：
-
-| 表名 | 作用 |
+| 项目项 | 内容 |
 | --- | --- |
-| `Readers` | 保存读者编号、姓名、类型和联系方式 |
-| `Books` | 保存图书 ISBN、书名、作者、分类和定价 |
-| `BookCopies` | 保存每一本实体书的条码和在馆状态 |
-| `BorrowRecords` | 保存借书、还书、到期日、逾期天数和罚金 |
+| 数据库 | SQL Server 2019+ |
+| 数据库名称 | `LibraryPractice` |
+| 技术栈 | T-SQL、SQL Server、SSMS |
+| 核心数据表 | 4 张 |
+| 视图 | 2 个 |
+| 存储过程 | 2 个 |
+| 索引 | 1 个筛选唯一索引、2 个业务查询索引 |
+| 示例数据 | 6 位读者、8 种图书、12 本实体副本、7 条借阅记录 |
+
+## 业务能力
+
+- 区分图书资料与实体库存，支持同一种图书存在多本实体副本。
+- 记录读者、实体书条码、借阅日期、应还日期、归还日期和罚金。
+- 通过状态字段与借阅历史共同描述图书当前状态和完整流转过程。
+- 查询当前在借、逾期记录、读者借阅统计、分类排名和库存情况。
+- 使用事务完成借书与还书，保证借阅记录和实体书状态同步更新。
+- 使用筛选唯一索引阻止同一本实体书被重复借出。
+
+## 数据库设计
+
+### 实体关系
 
 ```mermaid
 erDiagram
-    READERS ||--o{ BORROWRECORDS : "借阅"
+    READERS ||--o{ BORROWRECORDS : "产生借阅"
     BOOKS ||--o{ BOOKCOPIES : "拥有副本"
-    BOOKCOPIES ||--o{ BORROWRECORDS : "产生记录"
+    BOOKCOPIES ||--o{ BORROWRECORDS : "产生流转记录"
 
     READERS {
         int ReaderId PK
         varchar ReaderNo UK
         nvarchar ReaderName
         varchar ReaderType
+        varchar Phone
     }
 
     BOOKS {
         int BookId PK
         varchar ISBN UK
         nvarchar Title
+        nvarchar Author
         nvarchar Category
+        decimal Price
     }
 
     BOOKCOPIES {
@@ -55,21 +69,94 @@ erDiagram
     }
 ```
 
-完成后你将掌握：
+### 核心表
 
-- 主键、外键、唯一约束和检查约束
-- 多表连接、子查询、聚合、分组和窗口函数
-- 视图封装常用查询
-- 使用存储过程和事务完成借书、还书
-- 为实际查询设计普通索引和筛选索引
-- 使用 SSMS 验证结果并整理 GitHub 展示材料
+| 表名 | 职责 | 关键设计 |
+| --- | --- | --- |
+| `Readers` | 读者信息 | 业务编号 `ReaderNo` 唯一；读者类型通过 `CHECK` 限制 |
+| `Books` | 图书资料 | ISBN 唯一；价格必须大于 0 |
+| `BookCopies` | 实体库存 | 条码唯一；状态限定为可借、已借出或丢失 |
+| `BorrowRecords` | 借阅流水 | 通过外键关联读者与实体书；到期日必须晚于借阅日；罚金不得为负数 |
 
-## 2. 项目结构
+### 数据完整性
+
+- 使用主键保证每条记录具有稳定的内部标识。
+- 使用外键保证借阅记录不会引用不存在的读者或实体书。
+- 使用唯一约束保证读者编号、ISBN 和实体书条码不重复。
+- 使用检查约束限制读者类型、副本状态、金额范围和日期范围。
+- 使用筛选唯一索引保证同一实体书最多存在一条未归还记录。
+
+## 关键实现
+
+### 1. 借书与还书事务
+
+`dbo.usp_BorrowBook` 和 `dbo.usp_ReturnBook` 均启用：
+
+```sql
+SET XACT_ABORT ON;
+BEGIN TRY
+    BEGIN TRANSACTION;
+    -- 写入借阅记录并同步实体书状态
+    COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+    THROW;
+END CATCH;
+```
+
+借书时会同时完成以下动作：
+
+1. 校验读者与实体书是否存在。
+2. 校验实体书是否可借。
+3. 检查是否存在未归还的借阅记录。
+4. 插入借阅记录。
+5. 将实体书状态更新为 `BORROWED`。
+
+还书时会计算逾期天数和罚金，写入归还时间，并将实体书恢复为 `AVAILABLE`。
+
+并发校验使用 `UPDLOCK` 与 `HOLDLOCK`，避免两个并发操作同时将同一本实体书借给不同读者。
+
+### 2. 借阅分析查询
+
+项目包含以下查询能力：
+
+- 多表连接查询读者、图书、实体书和借阅信息。
+- 使用 `WHERE`、`GROUP BY`、`HAVING` 完成明细筛选与分类统计。
+- 使用 `CASE WHEN` 识别当前在借和逾期状态。
+- 使用 `DATEDIFF` 计算逾期天数，并按日费率计算预计罚金。
+- 使用 `NOT EXISTS` 查询从未借书的读者。
+- 使用 `RANK`、`ROW_NUMBER` 和窗口聚合完成分类排名和累计统计。
+
+逾期记录的核心条件：
+
+```sql
+WHERE br.ReturnDate IS NULL
+  AND br.DueDate < GETDATE()
+```
+
+### 3. 视图
+
+| 视图 | 用途 |
+| --- | --- |
+| `dbo.vw_ActiveLoans` | 汇总当前在借记录，并计算逾期标记和逾期天数 |
+| `dbo.vw_BookInventory` | 汇总每种图书的总副本数、可借数和借出数 |
+
+### 4. 索引
+
+| 索引 | 场景 |
+| --- | --- |
+| `UX_BorrowRecords_ActiveCopy` | 筛选唯一索引，阻止同一本实体书被重复借出 |
+| `IX_BorrowRecords_Reader_Date` | 加速按读者查询借阅历史 |
+| `IX_BookCopies_Book_Status` | 加速按图书和状态查询实体库存 |
+
+索引脚本在执行前检查对象是否已存在，可以重复运行。
+
+## 项目结构
 
 ```text
 SQLServer-Portfolio/
 ├─ README.md
-├─ 学习与讲解.md
 └─ sql/
    ├─ 00_check_environment.sql
    ├─ 01_create_database.sql
@@ -85,99 +172,66 @@ SQLServer-Portfolio/
    └─ 11_verify.sql
 ```
 
-## 3. 第一次运行
+## 运行方式
 
-### 第 1 步：连接 SQL Server
+### 环境要求
 
-1. 打开 SSMS。
-2. 连接你平时使用的 SQL Server 实例。
-3. 新建查询。
+- SQL Server 2019 或更高版本
+- SQL Server Management Studio 或其他兼容 T-SQL 的客户端
 
-### 第 2 步：按顺序执行脚本
+### 初始化数据库
 
-打开一个脚本后，点击“执行”或按 `F5`。必须严格按以下顺序运行：
+在 SSMS 中依次执行：
 
-1. `00_check_environment.sql`
-2. `01_create_database.sql`
-3. `02_create_tables.sql`
-4. `03_seed_data.sql`
-
-执行完成后，在左侧对象资源管理器中刷新 `LibraryPractice` 数据库，应该能看到 4 张表。
-
-### 第 3 步：学习查询
-
-1. 先运行 `04_basic_queries.sql`，观察每个结果集。
-2. 再运行 `05_advanced_queries.sql`。
-3. 对照 `学习与讲解.md`，理解每一步为什么这样写。
-
-### 第 4 步：创建数据库对象
-
-依次运行：
-
-1. `06_views.sql`
-2. `07_stored_procedures.sql`
-3. `08_indexes.sql`
-
-### 第 5 步：调用存储过程
-
-运行 `09_call_procedures.sql`。脚本会：
-
-1. 为读者 `R005` 办理条码 `B011` 的借书；
-2. 查询当前借阅记录；
-3. 办理还书；
-4. 再次查询，确认该实体书恢复为可借状态。
-
-### 第 6 步：体验事务
-
-运行 `10_transaction_exercise.sql`。脚本故意执行 `ROLLBACK`，用于观察“修改后回滚”的效果。
-
-### 第 7 步：最终验收
-
-运行 `11_verify.sql`。重点确认：
-
-- 数据表数量为 4；
-- 16 条借阅记录不会重复借出同一本实体书；
-- 当前借阅视图和逾期视图可以正常查询；
-- 借书和还书能够更新实体书状态。
-
-## 4. 推荐学习顺序
-
-不要一次看完所有 SQL。按下面的顺序学习，每一步都先在纸上写出预期结果，再执行：
-
-1. 能说出 4 张表分别保存什么数据。
-2. 能画出 `Books -> BookCopies -> BorrowRecords <- Readers` 的关联。
-3. 能独立写出图书、分类、借阅记录之间的 `JOIN`。
-4. 能解释 `WHERE` 和 `HAVING` 的区别。
-5. 能解释为什么借书、还书必须放在事务中。
-6. 能说明筛选唯一索引如何防止一本实体书被重复借出。
-
-## 5. 上传 GitHub
-
-先在 SSMS 中完整跑通脚本，并理解结果。然后在本项目目录执行：
-
-```powershell
-git init
-git add .
-git commit -m "feat: add SQL Server library management portfolio"
-git branch -M main
-git remote add origin 你的仓库地址
-git push -u origin main
+```text
+00_check_environment.sql
+01_create_database.sql
+02_create_tables.sql
+03_seed_data.sql
 ```
 
-不要上传数据库备份文件、账号密码、连接字符串或客户数据。
+> `02_create_tables.sql` 会删除并重建 `LibraryPractice` 中的 4 张练习表，重复执行会重置结构和数据。
 
-建议在 GitHub 仓库中补充 2 至 3 张截图：
+### 创建数据库对象
 
-1. 数据表关系或对象资源管理器截图；
-2. 一个多表查询的结果；
-3. 借书、还书存储过程执行成功的结果。
+依次执行：
 
-## 6. 跑通后可以写进简历的内容
+```text
+06_views.sql
+07_stored_procedures.sql
+08_indexes.sql
+```
 
-确认自己实际运行并理解后，可以使用下面的项目描述：
+### 执行查询与功能验证
 
-> **SQL Server 图书借阅数据库实践｜个人项目**  
-> 设计读者、图书、实体库存和借阅记录 4 张关联表，使用主外键、唯一约束和检查约束规范数据；编写多表连接、聚合统计、子查询和窗口函数完成借阅分析；通过视图封装在借和逾期查询，使用事务型存储过程处理借书、还书和逾期罚金，并设计普通索引与筛选唯一索引。项目脚本、说明文档与运行结果已发布至 GitHub。
+```text
+04_basic_queries.sql
+05_advanced_queries.sql
+09_call_procedures.sql
+10_transaction_exercise.sql
+11_verify.sql
+```
 
-只有完成 GitHub 上传后，最后一句才能写。
+`09_call_procedures.sql` 会使用读者 `R005` 和实体书 `B011` 完成一次借书与还书。执行后，`B011` 应恢复为 `AVAILABLE`。
 
+`10_transaction_exercise.sql` 演示事务内修改与 `ROLLBACK` 回滚，不会保留示例修改。
+
+## 验收结果
+
+`11_verify.sql` 用于核对数据库对象和业务状态。完整运行后的预期结果：
+
+```text
+表：4 张
+视图：2 个
+存储过程：2 个
+读者：6 位
+图书：8 种
+实体副本：12 本
+借阅记录：7 条
+```
+
+筛选唯一索引通过阻止重复在借记录保证数据一致性。
+
+## 项目边界
+
+该项目聚焦数据库层实现，不包含前端界面、Web API 和生产部署配置。示例读者、电话、图书及借阅数据均为虚构数据。
