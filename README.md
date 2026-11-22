@@ -238,19 +238,19 @@ SQLServer-Portfolio/
 
 展示 `LibraryPractice` 中的 4 张业务表和 2 个视图。
 
-![数据库对象](docs/截图/01-database-structure.png)
+![数据库对象](docs/screenshots/01-database-structure.png)
 
 ### 逾期借阅分析
 
 使用多表连接、`DATEDIFF` 和条件过滤查询未归还的逾期记录，并计算预计罚金。
 
-![逾期借阅查询](docs/截图/02-overdue-query.png)
+![逾期借阅查询](docs/screenshots/02-overdue-query.png)
 
 ### 借书事务
 
 调用 `dbo.usp_BorrowBook` 完成借书，结果返回借阅记录编号、读者编号、实体书条码和应还日期。
 
-![借书存储过程执行结果](docs/截图/03-stored-procedure.png)
+![借书存储过程执行结果](docs/screenshots/03-stored-procedure.png)
 
 ## 项目边界
 
